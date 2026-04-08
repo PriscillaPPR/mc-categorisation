@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import re
 import io
+import csv
+from io import StringIO
 from rapidfuzz import fuzz
 
 st.set_page_config(
@@ -69,27 +71,65 @@ with col1:
     # STEP 1
     st.subheader("1 · Matrice de catégories")
     st.caption("Colonnes = catégories, lignes = valeurs possibles")
+    st.info("📋 **Format attendu** : Organisez votre matrice avec les catégories en colonnes et les valeurs possibles en lignes. Copiez-collez directement une plage depuis Excel ou Google Sheets, ou collez un CSV/TSV.")
 
     matrix_file = st.file_uploader(
-        "Fichier Excel (.xlsx)",
-        type=["xlsx"],
+        "Fichier matrice (.xlsx, .csv, .txt)",
+        type=["xlsx", "csv", "txt"],
         key="matrix_upload",
         label_visibility="collapsed"
     )
 
-    if matrix_file:
-        df_matrix = pd.read_excel(matrix_file).dropna(how="all").dropna(how="all", axis=1)
-        df_matrix.columns = [str(c).strip() for c in df_matrix.columns]
-        matrix = {
-            col: df_matrix[col].dropna().astype(str).str.strip().tolist()
-            for col in df_matrix.columns
-        }
-        matrix = {k: [v for v in vals if v] for k, vals in matrix.items()}
-        st.session_state.matrix = matrix
+    matrix_text = st.text_area(
+        "Ou collez votre matrice ici",
+        placeholder="Couleur,Taille\nRouge,M\nBleu,L\nVert,S",
+        height=120
+    )
+
+    if st.button("Charger la matrice", use_container_width=True):
+        if matrix_file:
+            if matrix_file.name.endswith('.xlsx'):
+                df_matrix = pd.read_excel(matrix_file).dropna(how="all").dropna(how="all", axis=1)
+            elif matrix_file.name.endswith('.csv'):
+                df_matrix = pd.read_csv(matrix_file).dropna(how="all").dropna(how="all", axis=1)
+            else:  # .txt
+                df_matrix = pd.read_csv(matrix_file, sep=',').dropna(how="all").dropna(how="all", axis=1)
+            df_matrix.columns = [str(c).strip() for c in df_matrix.columns]
+            matrix = {
+                col: df_matrix[col].dropna().astype(str).str.strip().tolist()
+                for col in df_matrix.columns
+            }
+            matrix = {k: [v for v in vals if v] for k, vals in matrix.items()}
+            st.session_state.matrix = matrix
+        elif matrix_text.strip():
+            sample = matrix_text.strip()
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=',;\t')
+                delimiter = dialect.delimiter
+            except csv.Error:
+                if '\t' in sample:
+                    delimiter = '\t'
+                elif ';' in sample:
+                    delimiter = ';'
+                else:
+                    delimiter = ','
+            reader = csv.reader(StringIO(sample), delimiter=delimiter)
+            rows = [row for row in reader if any(cell.strip() for cell in row)]
+            if rows:
+                headers = [h.strip() for h in rows[0]]
+                data = {h: [] for h in headers}
+                for row in rows[1:]:
+                    for i, v in enumerate(row):
+                        if i < len(headers) and v.strip():
+                            data[headers[i]].append(v.strip())
+                matrix = {k: [v for v in vals if v] for k, vals in data.items()}
+                st.session_state.matrix = matrix
 
     if st.session_state.matrix:
-        for cat, vals in st.session_state.matrix.items():
-            st.markdown(f"**{cat}** — {', '.join(vals)}")
+        from itertools import zip_longest
+        rows = list(zip_longest(*st.session_state.matrix.values(), fillvalue=''))
+        df_display = pd.DataFrame(rows, columns=st.session_state.matrix.keys())
+        st.dataframe(df_display, use_container_width=True)
         st.success(f"{len(st.session_state.matrix)} catégories chargées")
 
     st.divider()
@@ -107,7 +147,7 @@ with col1:
 
     kw_text = st.text_area(
         "Ou collez vos mots-clés ici",
-        placeholder="lunettes de vue homme noir\nlunettes de soleil femme gucci\nlentilles enfant bleu",
+        placeholder="baskets running homme blanches\nbaskets course femme adidas\nchaussures enfant bleu",
         height=120
     )
 
@@ -139,6 +179,7 @@ with col1:
     mode = st.radio(
         "Mode de correspondance",
         ["Exact", "Approximatif (fuzzy)"],
+        index=1,
         horizontal=True,
         help="Exact = le mot doit être présent tel quel. Fuzzy = gère les variantes orthographiques."
     )
